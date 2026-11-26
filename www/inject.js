@@ -143,8 +143,8 @@
       var nome = campoNome && (campoNome.value || '').trim();
       if (nome) ls('aai_nome', nome.slice(0, 120));
       if (email && email.indexOf('@') > 0) { ls('aai_email', email); return email; }
-      return null;
-    }).catch(function () { return null; });
+      return guardado || null;
+    }).catch(function () { return guardado || null; });
   }
 
   var tokenFcm = null;
