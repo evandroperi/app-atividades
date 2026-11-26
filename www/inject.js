@@ -59,6 +59,7 @@
     ev.stopImmediatePropagation();
     var nome = (a.getAttribute('download') || a.textContent || '').trim();
     LG.openFile({ url: abs, name: nome });
+    if (window.__aaiDownload) window.__aaiDownload(nome);
   }, true);
 
   if (ESCONDER_VITRINE) {
@@ -105,10 +106,88 @@
     };
   }
 
-  // Notificações (Firebase) — só depois do login.
+  // ===== Central de notificações (Lovable "Automação") =====
+  var API = 'https://comercial.atividadesanosiniciais.com.br/api/public/';
+  var VERSAO_APP = '1.3.0';
+  var naLogin = /^\/login/.test(location.pathname);
+
+  function ls(k, v) {
+    try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { return null; }
+  }
+  function ss(k, v) {
+    try { if (v === undefined) return sessionStorage.getItem(k); sessionStorage.setItem(k, v); } catch (e) { return null; }
+  }
+  function postar(caminho, corpo) {
+    try {
+      return fetch(API + caminho, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(corpo), keepalive: true
+      }).catch(function () {});
+    } catch (e) { return Promise.resolve(); }
+  }
+
+  // Saiu da conta: esquece quem era.
+  if (/^\/logout/.test(location.pathname)) { ls('aai_email', null); ls('aai_reg', null); }
+  if (naLogin) ss('aai_estava_login', '1');
+
+  // E-mail da cliente logada (lido do Perfil, guardado no aparelho).
+  function obterEmail() {
+    var guardado = ls('aai_email');
+    if (guardado) return Promise.resolve(guardado);
+    return fetch('/perfil', { credentials: 'include' }).then(function (r) { return r.text(); }).then(function (html) {
+      var d = new DOMParser().parseFromString(html, 'text/html');
+      var campo = d.querySelector('input[name=email]');
+      var email = campo && (campo.value || '').trim().toLowerCase();
+      if (email && email.indexOf('@') > 0) { ls('aai_email', email); return email; }
+      return null;
+    }).catch(function () { return null; });
+  }
+
+  var tokenFcm = null;
+  function evento(tipo, dados) {
+    if (naLogin) return;
+    obterEmail().then(function (email) {
+      if (!email) return;
+      var corpo = { email: email, event_type: tipo, event_data: dados || {} };
+      if (tokenFcm) corpo.fcm_token = tokenFcm;
+      postar('app-track-event', corpo);
+    });
+  }
+
+  // Lembra o nome do material ao tocar no card (a página do material não mostra o nome).
+  document.addEventListener('click', function (ev) {
+    var a = ev.target && ev.target.closest && ev.target.closest('a[href*="visualizar-material"]');
+    if (!a) return;
+    var card = a.closest('.card') || a.parentElement;
+    var img = card && card.querySelector('img');
+    var id = (a.getAttribute('href') || '').split('/').pop();
+    if (img && img.alt && id) ss('aai_mat_' + id, img.alt);
+  }, true);
+
+  function materialAtual() {
+    var m = location.pathname.match(/visualizar-material\/(\d+)/);
+    if (!m) return null;
+    return { material_id: m[1], material_name: ss('aai_mat_' + m[1]) || '' };
+  }
+
+  // Downloads também viram evento (chamado pelo handler de arquivos acima).
+  window.__aaiDownload = function (nomeArquivo) {
+    var dados = materialAtual() || {};
+    dados.file_name = nomeArquivo || '';
+    evento('file_download', dados);
+  };
+
   function iniciarNotificacoes() {
     var FM = Cap && Cap.Plugins && Cap.Plugins.FirebaseMessaging;
-    if (!FM || /^\/login/.test(location.pathname)) return;
+    if (naLogin) return;
+
+    // Eventos de navegação
+    if (ss('aai_aberto') !== '1') { ss('aai_aberto', '1'); evento('app_open', {}); }
+    if (ss('aai_estava_login') === '1') { ss('aai_estava_login', '0'); evento('login', {}); }
+    var mat = materialAtual();
+    if (mat) evento('material_view', mat);
+
+    if (!FM) return;
 
     FM.addListener('notificationActionPerformed', function (ev) {
       var url = ev && ev.notification && ev.notification.data && ev.notification.data.url;
@@ -117,15 +196,26 @@
       if (hostDe(url) === location.hostname) location.href = url;
     });
 
-    if (localStorage.getItem('aai_push_ok') === '1') return;
     FM.requestPermissions().then(function (r) {
-      if (r && r.receive === 'granted') {
-        return FM.subscribeToTopic({ topic: 'todos' }).then(function () {
+      if (!r || r.receive !== 'granted') return;
+      if (ls('aai_push_ok') !== '1') {
+        FM.subscribeToTopic({ topic: 'todos' }).then(function () {
           return FM.subscribeToTopic({ topic: plataforma });
-        }).then(function () {
-          localStorage.setItem('aai_push_ok', '1');
-        });
+        }).then(function () { ls('aai_push_ok', '1'); }).catch(function () {});
       }
+      return FM.getToken().then(function (res) {
+        tokenFcm = res && res.token;
+        if (!tokenFcm) return;
+        return obterEmail().then(function (email) {
+          if (!email) return;
+          // Registra no máximo 1x por dia, ou quando mudar o aparelho/cliente.
+          var chave = email + '|' + tokenFcm + '|' + new Date().toISOString().slice(0, 10);
+          if (ls('aai_reg') === chave) return;
+          return postar('app-register-device', {
+            email: email, fcm_token: tokenFcm, platform: plataforma, app_version: VERSAO_APP
+          }).then(function () { ls('aai_reg', chave); });
+        });
+      });
     }).catch(function () {});
   }
   if (document.readyState === 'complete') iniciarNotificacoes();
