@@ -27,6 +27,21 @@
     try { return /\/vitrine(\/|$|\?)/.test(new URL(url, location.href).pathname); } catch (e) { return false; }
   }
 
+  // "Esqueci minha senha" → link novo de recuperação.
+  var LINK_NOVA_SENHA = 'https://redirect.atividadesanosiniciais.com.br/r/6ed3c482-3255-4580-b780-9a3cf5f15243';
+  function trocarLinkSenha() {
+    var as = document.querySelectorAll('a');
+    for (var i = 0; i < as.length; i++) {
+      var a = as[i];
+      if (/esqueci/i.test(a.textContent || '') || /refazersenha/i.test(a.getAttribute('href') || '')) {
+        if (a.getAttribute('href') !== LINK_NOVA_SENHA) a.setAttribute('href', LINK_NOVA_SENHA);
+        a.removeAttribute('target');
+      }
+    }
+  }
+  trocarLinkSenha();
+  new MutationObserver(trocarLinkSenha).observe(document.documentElement, { childList: true, subtree: true });
+
   if (ESCONDER_VITRINE) {
     // 1) Se cair na página da vitrine, volta para Meus Materiais.
     if (/^\/vitrine/.test(location.pathname)) {
