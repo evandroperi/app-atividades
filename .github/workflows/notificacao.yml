@@ -1,0 +1,38 @@
+name: Enviar notificação
+
+on:
+  workflow_dispatch:
+    inputs:
+      titulo:
+        description: "Título"
+        required: true
+      mensagem:
+        description: "Texto da notificação"
+        required: true
+      link:
+        description: "Página do painel para abrir ao tocar (opcional)"
+        required: false
+        default: ""
+      publico:
+        description: "Para quem"
+        type: choice
+        options: [todos, ios, android]
+        default: todos
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install google-auth requests
+      - name: Enviar
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TITULO: ${{ inputs.titulo }}
+          MENSAGEM: ${{ inputs.mensagem }}
+          LINK: ${{ inputs.link }}
+          PUBLICO: ${{ inputs.publico }}
+        run: python scripts/enviar_notificacao.py
