@@ -42,6 +42,25 @@
   trocarLinkSenha();
   new MutationObserver(trocarLinkSenha).observe(document.documentElement, { childList: true, subtree: true });
 
+  // Downloads: em vez de abrir o PDF por cima do app (sem como voltar),
+  // o app baixa e mostra numa tela própria com "OK" e o botão de compartilhar/salvar.
+  var ARQUIVO = /\.(pdf|pptx?|docx?|xlsx?|zip|png|jpe?g|mp3|mp4)(\?|#|$)/i;
+  document.addEventListener('click', function (ev) {
+    var LG = Cap && Cap.Plugins && Cap.Plugins.LinkGuard;
+    if (!LG || !LG.openFile) return;
+    var a = ev.target && ev.target.closest && ev.target.closest('a[href]');
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (!(a.hasAttribute('download') || ARQUIVO.test(href))) return;
+    var abs;
+    try { abs = new URL(href, location.href).href; } catch (e) { return; }
+    if (!/^https?:/.test(abs)) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    var nome = (a.getAttribute('download') || a.textContent || '').trim();
+    LG.openFile({ url: abs, name: nome });
+  }, true);
+
   if (ESCONDER_VITRINE) {
     // 1) Se cair na página da vitrine, volta para Meus Materiais.
     if (/^\/vitrine/.test(location.pathname)) {

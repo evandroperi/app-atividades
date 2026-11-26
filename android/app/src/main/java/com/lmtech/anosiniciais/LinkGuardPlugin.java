@@ -1,6 +1,13 @@
 package com.lmtech.anosiniciais;
 
+import android.app.DownloadManager;
+import android.content.Context;
 import android.net.Uri;
+import android.os.Environment;
+import android.webkit.CookieManager;
+import android.widget.Toast;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
 import android.webkit.WebView;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.WebViewListener;
@@ -40,6 +47,31 @@ public class LinkGuardPlugin extends Plugin {
                 if (script != null) webView.evaluateJavascript(script, null);
             }
         });
+    }
+
+    /** Baixa o arquivo para a pasta Downloads, com aviso na barra de notificações. */
+    @PluginMethod
+    public void openFile(PluginCall call) {
+        String url = call.getString("url");
+        if (url == null) { call.reject("URL inválida"); return; }
+        String nome = call.getString("name", "");
+        if (nome == null || nome.trim().isEmpty()) nome = Uri.parse(url).getLastPathSegment();
+        nome = nome.trim().replace("/", "-");
+        try {
+            DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
+            String cookies = CookieManager.getInstance().getCookie(url);
+            if (cookies != null) req.addRequestHeader("Cookie", cookies);
+            req.setTitle(nome);
+            req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, nome);
+            DownloadManager dm = (DownloadManager) getContext().getSystemService(Context.DOWNLOAD_SERVICE);
+            dm.enqueue(req);
+            final String aviso = "Baixando " + nome + "… veja em Downloads";
+            getActivity().runOnUiThread(() -> Toast.makeText(getContext(), aviso, Toast.LENGTH_LONG).show());
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Não foi possível baixar", e);
+        }
     }
 
     @Override
