@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "417369173078",
+    "project_id": "anos-iniciais-d449e",
+    "storage_bucket": "anos-iniciais-d449e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:417369173078:android:1a1fb63f55758881481ff7",
+        "android_client_info": {
+          "package_name": "br.com.atividadesanosiniciais.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB-J8ZuOUu-_JlpjNUMlAzatSkZlRmy2oM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -4,7 +4,7 @@ android {
     namespace = "com.lmtech.anosiniciais"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.lmtech.anosiniciais"
+        applicationId "br.com.atividadesanosiniciais.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
