@@ -80,11 +80,15 @@ public class LinkGuardPlugin: CAPPlugin, CAPBridgedPlugin, QLPreviewControllerDa
                   let vc = self.bridge?.viewController else { return }
             self.baixando = true
 
-            let carregando = UIActivityIndicatorView(style: .large)
-            carregando.color = UIColor(red: 0.22, green: 0.62, blue: 0.89, alpha: 1)
-            carregando.center = vc.view.center
-            carregando.startAnimating()
-            vc.view.addSubview(carregando)
+            var nomeArquivo = (nome?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+                ?? url.lastPathComponent
+            nomeArquivo = nomeArquivo.replacingOccurrences(of: "/", with: "-")
+            if (nomeArquivo as NSString).pathExtension.isEmpty, !url.pathExtension.isEmpty {
+                nomeArquivo += "." + url.pathExtension
+            }
+
+            let aviso = AvisoDownload(nome: nomeArquivo)
+            aviso.mostrar(em: vc.view)
 
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
                 var req = URLRequest(url: url)
@@ -97,36 +101,35 @@ public class LinkGuardPlugin: CAPPlugin, CAPBridgedPlugin, QLPreviewControllerDa
                     req.setValue(valor, forHTTPHeaderField: campo)
                 }
 
-                URLSession.shared.downloadTask(with: req) { tmp, resp, erro in
-                    DispatchQueue.main.async {
-                        carregando.removeFromSuperview()
-                        self.baixando = false
-                        guard let tmp = tmp, erro == nil else {
-                            self.avisar(vc, "Não foi possível baixar o arquivo. Confira sua internet e tente de novo.")
-                            return
-                        }
-                        var nomeArquivo = (nome?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
-                            ?? resp?.suggestedFilename
-                            ?? url.lastPathComponent
-                        nomeArquivo = nomeArquivo.replacingOccurrences(of: "/", with: "-")
-                        if (nomeArquivo as NSString).pathExtension.isEmpty, !url.pathExtension.isEmpty {
-                            nomeArquivo += "." + url.pathExtension
-                        }
-                        let pasta = FileManager.default.temporaryDirectory
-                            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-                        do {
-                            try FileManager.default.createDirectory(at: pasta, withIntermediateDirectories: true)
-                            let destino = pasta.appendingPathComponent(nomeArquivo)
-                            try FileManager.default.moveItem(at: tmp, to: destino)
-                            self.arquivoAtual = destino
-                            let previa = QLPreviewController()
-                            previa.dataSource = self
-                            vc.present(previa, animated: true)
-                        } catch {
-                            self.avisar(vc, "Não foi possível abrir o arquivo.")
-                        }
+                // Sem compressão: o servidor manda o arquivo direto e o progresso fica certo.
+                req.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+
+                let baixador = Baixador()
+                aviso.aoCancelar = { baixador.cancelar() }
+                baixador.progresso = { p in aviso.atualizar(p) }
+                baixador.baixar(req, tentativas: 2) { tmp, erro in
+                    aviso.esconder()
+                    self.baixando = false
+                    if let erro = erro as NSError? {
+                        if erro.code == NSURLErrorCancelled { return }
+                        self.avisar(vc, "Não foi possível baixar o arquivo. Confira sua internet e tente de novo. (erro \(erro.code))")
+                        return
                     }
-                }.resume()
+                    guard let tmp = tmp else { return }
+                    let pasta = FileManager.default.temporaryDirectory
+                        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                    do {
+                        try FileManager.default.createDirectory(at: pasta, withIntermediateDirectories: true)
+                        let destino = pasta.appendingPathComponent(nomeArquivo)
+                        try FileManager.default.moveItem(at: tmp, to: destino)
+                        self.arquivoAtual = destino
+                        let previa = QLPreviewController()
+                        previa.dataSource = self
+                        vc.present(previa, animated: true)
+                    } catch {
+                        self.avisar(vc, "Não foi possível abrir o arquivo.")
+                    }
+                }
             }
         }
     }
@@ -144,5 +147,171 @@ public class LinkGuardPlugin: CAPPlugin, CAPBridgedPlugin, QLPreviewControllerDa
 
     public func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
         return arquivoAtual! as NSURL
+    }
+}
+
+/// Baixa arquivos grandes (PowerPoint de 20, 50, 100 MB) com paciência: tempo longo, progresso e 1 nova tentativa.
+final class Baixador: NSObject, URLSessionDownloadDelegate {
+    var progresso: ((Double) -> Void)?
+    private var concluir: ((URL?, Error?) -> Void)?
+    private var sessao: URLSession?
+    private var tarefa: URLSessionDownloadTask?
+    private var requisicao: URLRequest?
+    private var tentativasRestantes = 0
+    private var cancelado = false
+
+    func baixar(_ req: URLRequest, tentativas: Int, concluir: @escaping (URL?, Error?) -> Void) {
+        self.requisicao = req
+        self.tentativasRestantes = tentativas
+        self.concluir = concluir
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 120
+        config.timeoutIntervalForResource = 60 * 30
+        config.waitsForConnectivity = true
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        sessao = URLSession(configuration: config, delegate: self, delegateQueue: OperationQueue.main)
+        iniciar()
+    }
+
+    private func iniciar() {
+        guard let req = requisicao else { return }
+        tentativasRestantes -= 1
+        tarefa = sessao?.downloadTask(with: req)
+        tarefa?.resume()
+    }
+
+    func cancelar() {
+        cancelado = true
+        tarefa?.cancel()
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        if totalBytesExpectedToWrite > 0 {
+            progresso?(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+        }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        // O arquivo temporário some quando este método termina: move para um lugar seguro antes.
+        let seguro = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        do {
+            try FileManager.default.moveItem(at: location, to: seguro)
+            if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                finalizar(nil, NSError(domain: "http", code: http.statusCode))
+            } else {
+                finalizar(seguro, nil)
+            }
+        } catch {
+            finalizar(nil, error)
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let error = error else { return }
+        if !cancelado, tentativasRestantes > 0 {
+            iniciar()
+            return
+        }
+        finalizar(nil, error)
+    }
+
+    private func finalizar(_ url: URL?, _ erro: Error?) {
+        let fim = concluir
+        concluir = nil
+        sessao?.finishTasksAndInvalidate()
+        fim?(url, erro)
+    }
+}
+
+/// Aviso no centro da tela enquanto baixa. Cobre a tela inteira para ninguém tocar de novo.
+final class AvisoDownload {
+    var aoCancelar: (() -> Void)?
+    private let fundo = UIView()
+    private let barra = UIProgressView(progressViewStyle: .default)
+    private let porcentagem = UILabel()
+
+    init(nome: String) {
+        let azul = UIColor(red: 0.22, green: 0.62, blue: 0.89, alpha: 1)
+        fundo.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        fundo.translatesAutoresizingMaskIntoConstraints = false
+
+        let caixa = UIView()
+        caixa.backgroundColor = .white
+        caixa.layer.cornerRadius = 18
+        caixa.translatesAutoresizingMaskIntoConstraints = false
+
+        let girando = UIActivityIndicatorView(style: .large)
+        girando.color = azul
+        girando.startAnimating()
+
+        let titulo = UILabel()
+        titulo.text = "Baixando arquivo…"
+        titulo.font = .boldSystemFont(ofSize: 19)
+        titulo.textColor = .black
+        titulo.textAlignment = .center
+
+        let nomeLabel = UILabel()
+        nomeLabel.text = nome
+        nomeLabel.font = .systemFont(ofSize: 14)
+        nomeLabel.textColor = .darkGray
+        nomeLabel.textAlignment = .center
+        nomeLabel.numberOfLines = 2
+
+        barra.progressTintColor = azul
+        barra.progress = 0
+
+        porcentagem.text = "Aguarde, arquivos grandes podem demorar um pouco"
+        porcentagem.font = .systemFont(ofSize: 13)
+        porcentagem.textColor = .gray
+        porcentagem.textAlignment = .center
+        porcentagem.numberOfLines = 2
+
+        let cancelar = UIButton(type: .system)
+        cancelar.setTitle("Cancelar", for: .normal)
+        cancelar.titleLabel?.font = .systemFont(ofSize: 16)
+        cancelar.addTarget(self, action: #selector(tocouCancelar), for: .touchUpInside)
+
+        let pilha = UIStackView(arrangedSubviews: [girando, titulo, nomeLabel, barra, porcentagem, cancelar])
+        pilha.axis = .vertical
+        pilha.spacing = 12
+        pilha.alignment = .fill
+        pilha.translatesAutoresizingMaskIntoConstraints = false
+
+        caixa.addSubview(pilha)
+        fundo.addSubview(caixa)
+        NSLayoutConstraint.activate([
+            caixa.centerXAnchor.constraint(equalTo: fundo.centerXAnchor),
+            caixa.centerYAnchor.constraint(equalTo: fundo.centerYAnchor),
+            caixa.widthAnchor.constraint(equalToConstant: 290),
+            pilha.topAnchor.constraint(equalTo: caixa.topAnchor, constant: 24),
+            pilha.bottomAnchor.constraint(equalTo: caixa.bottomAnchor, constant: -12),
+            pilha.leadingAnchor.constraint(equalTo: caixa.leadingAnchor, constant: 20),
+            pilha.trailingAnchor.constraint(equalTo: caixa.trailingAnchor, constant: -20)
+        ])
+    }
+
+    func mostrar(em view: UIView) {
+        view.addSubview(fundo)
+        NSLayoutConstraint.activate([
+            fundo.topAnchor.constraint(equalTo: view.topAnchor),
+            fundo.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            fundo.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            fundo.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+    }
+
+    func atualizar(_ p: Double) {
+        barra.setProgress(Float(p), animated: true)
+        porcentagem.text = "\(Int(p * 100))%"
+    }
+
+    func esconder() {
+        fundo.removeFromSuperview()
+    }
+
+    @objc private func tocouCancelar() {
+        aoCancelar?()
+        esconder()
     }
 }
