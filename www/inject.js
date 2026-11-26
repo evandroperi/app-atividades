@@ -127,17 +127,21 @@
   }
 
   // Saiu da conta: esquece quem era.
-  if (/^\/logout/.test(location.pathname)) { ls('aai_email', null); ls('aai_reg', null); }
+  if (/^\/logout/.test(location.pathname)) { ls('aai_email', null); ls('aai_nome', null); ls('aai_reg', null); }
   if (naLogin) ss('aai_estava_login', '1');
 
   // E-mail da cliente logada (lido do Perfil, guardado no aparelho).
   function obterEmail() {
     var guardado = ls('aai_email');
-    if (guardado) return Promise.resolve(guardado);
+    if (guardado && (ls('aai_nome') || ss('aai_perfil_lido') === '1')) return Promise.resolve(guardado);
+    ss('aai_perfil_lido', '1');
     return fetch('/perfil', { credentials: 'include' }).then(function (r) { return r.text(); }).then(function (html) {
       var d = new DOMParser().parseFromString(html, 'text/html');
       var campo = d.querySelector('input[name=email]');
+      var campoNome = d.querySelector('input[name=name]');
       var email = campo && (campo.value || '').trim().toLowerCase();
+      var nome = campoNome && (campoNome.value || '').trim();
+      if (nome) ls('aai_nome', nome.slice(0, 120));
       if (email && email.indexOf('@') > 0) { ls('aai_email', email); return email; }
       return null;
     }).catch(function () { return null; });
@@ -192,8 +196,10 @@
     FM.addListener('notificationActionPerformed', function (ev) {
       var url = ev && ev.notification && ev.notification.data && ev.notification.data.url;
       if (!url) return;
-      if (ESCONDER_VITRINE && ehCompra(url)) return;
-      if (hostDe(url) === location.hostname) location.href = url;
+      if (ESCONDER_VITRINE && ehCompra(url)) return;   // iPhone: link de compra não abre (regra da Apple)
+      // Páginas do painel abrem dentro do app; outros links (WhatsApp, Instagram...) abrem fora.
+      // (o Capacitor abre no navegador/app externo tudo que não for do painel)
+      location.href = url;
     });
 
     FM.requestPermissions().then(function (r) {
@@ -209,11 +215,11 @@
         return obterEmail().then(function (email) {
           if (!email) return;
           // Registra no máximo 1x por dia, ou quando mudar o aparelho/cliente.
-          var chave = email + '|' + tokenFcm + '|' + new Date().toISOString().slice(0, 10);
+          var chave = email + '|' + (ls('aai_nome') || '') + '|' + tokenFcm + '|' + new Date().toISOString().slice(0, 10);
           if (ls('aai_reg') === chave) return;
-          return postar('app-register-device', {
-            email: email, fcm_token: tokenFcm, platform: plataforma, app_version: VERSAO_APP
-          }).then(function () { ls('aai_reg', chave); });
+          var corpo = { email: email, fcm_token: tokenFcm, platform: plataforma, app_version: VERSAO_APP };
+          if (ls('aai_nome')) corpo.name = ls('aai_nome');
+          return postar('app-register-device', corpo).then(function () { ls('aai_reg', chave); });
         });
       });
     }).catch(function () {});
