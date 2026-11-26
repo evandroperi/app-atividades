@@ -30,8 +30,10 @@ public class LinkGuardPlugin: CAPPlugin, CAPBridgedPlugin, QLPreviewControllerDa
     public let identifier = "LinkGuardPlugin"
     public let jsName = "LinkGuard"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "openFile", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "openFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openExternal", returnType: CAPPluginReturnPromise)
     ]
+    private var observadorAtivo: NSObjectProtocol?
 
     private let hostsBloqueados = try! NSRegularExpression(
         pattern: "(^|\\.)(seguro|checkout|pay|pagamento)\\.|kavoo|hotmart|eduzz|kiwify|doppus|mercadopago|pagseguro|^(www\\.)?atividadesanosiniciais\\.com\\.br$",
@@ -71,6 +73,31 @@ public class LinkGuardPlugin: CAPPlugin, CAPBridgedPlugin, QLPreviewControllerDa
         }
         baixarEMostrar(url, nome: call.getString("name"))
         call.resolve()
+    }
+
+    /// Abre um link fora do app (Safari, WhatsApp...). Se o app ainda está "acordando"
+    /// (ex.: a cliente tocou numa notificação), espera ficar ativo antes de abrir.
+    @objc func openExternal(_ call: CAPPluginCall) {
+        guard let texto = call.getString("url"), let url = URL(string: texto),
+              url.scheme == "https" || url.scheme == "http" else {
+            call.reject("URL inválida")
+            return
+        }
+        DispatchQueue.main.async {
+            let abrir = { UIApplication.shared.open(url, options: [:], completionHandler: nil) }
+            if UIApplication.shared.applicationState == .active {
+                abrir()
+            } else {
+                if let o = self.observadorAtivo { NotificationCenter.default.removeObserver(o) }
+                self.observadorAtivo = NotificationCenter.default.addObserver(
+                    forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                    if let o = self?.observadorAtivo { NotificationCenter.default.removeObserver(o) }
+                    self?.observadorAtivo = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { abrir() }
+                }
+            }
+            call.resolve()
+        }
     }
 
     private func baixarEMostrar(_ url: URL, nome: String?) {

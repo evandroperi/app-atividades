@@ -108,7 +108,7 @@
 
   // ===== Central de notificações (Lovable "Automação") =====
   var API = 'https://comercial.atividadesanosiniciais.com.br/api/public/';
-  var VERSAO_APP = '1.3.0';
+  var VERSAO_APP = '1.3.0-109';
   var naLogin = /^\/login/.test(location.pathname);
 
   function ls(k, v) {
@@ -198,8 +198,15 @@
       if (!url) return;
       if (ESCONDER_VITRINE && ehCompra(url)) return;   // iPhone: link de compra não abre (regra da Apple)
       // Páginas do painel abrem dentro do app; outros links (WhatsApp, Instagram...) abrem fora.
-      // (o Capacitor abre no navegador/app externo tudo que não for do painel)
-      location.href = url;
+      if (hostDe(url) === location.hostname) { location.href = url; return; }
+      // Fora do painel: abre no Safari/WhatsApp. No iPhone usa o método nativo, que espera o app
+      // terminar de abrir (ao tocar na notificação o app ainda não está ativo e o link se perdia).
+      var LG = Cap && Cap.Plugins && Cap.Plugins.LinkGuard;
+      if (LG && LG.openExternal && plataforma === 'ios') {
+        LG.openExternal({ url: url }).catch(function () { location.href = url; });
+      } else {
+        location.href = url;
+      }
     });
 
     FM.requestPermissions().then(function (r) {
